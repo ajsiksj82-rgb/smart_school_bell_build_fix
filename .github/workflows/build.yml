@@ -1,0 +1,83 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Analyze, test, and build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter project root
+        run: |
+          if [ ! -f pubspec.yaml ]; then
+            echo "::error::pubspec.yaml was not found at repository root. Commit the contents of the Flutter project root, not its parent directory."
+            find . -maxdepth 3 -name pubspec.yaml -print
+            exit 1
+          fi
+          echo "Flutter project root: $(pwd)"
+          echo "pubspec.yaml: $(realpath pubspec.yaml)"
+
+      - name: Generate missing Android platform files
+        shell: bash
+        run: |
+          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
+            echo "Android Gradle app file is missing; generating the Android platform with Flutter."
+            # The supplied project has no Android platform files. Generate them from the
+            # current Flutter SDK before building; application Dart files are preserved.
+            if [ -d android ]; then
+              mv android "android.incomplete.$(date +%s)"
+            fi
+            flutter create --platforms=android --project-name smart_school_bell --org com.smartskills .
+          fi
+          test -f android/gradlew || test -f android/gradlew.bat
+          test -f android/settings.gradle || test -f android/settings.gradle.kts
+          test -f android/app/build.gradle || test -f android/app/build.gradle.kts
+          echo "Android scaffold is present."
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Format Dart sources
+        run: dart format lib test
+
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test --reporter expanded
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-school-bell-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
